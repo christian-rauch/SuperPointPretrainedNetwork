@@ -220,6 +220,7 @@ class SuperPointFrontend(object):
     Output
       corners - 3xN numpy array with corners [x_i, y_i, confidence_i]^T.
       desc - 256xN numpy array of corresponding unit normalized descriptors.
+      coarse_desc - H/8xW/8x256 numpy array with the common encoder output.
       heatmap - HxW numpy heatmap in range [0,1] of point confidences.
       """
     assert img.ndim == 2, 'Image must be grayscale.'
@@ -250,7 +251,7 @@ class SuperPointFrontend(object):
     heatmap = np.reshape(heatmap, [Hc*self.cell, Wc*self.cell])
     ys, xs = np.where(heatmap >= self.conf_thresh) # Confidence threshold.
     if len(xs) == 0:
-      return np.zeros((3, 0)), None, None
+      return np.zeros((3, 0)), None, coarse_desc, heatmap
     pts = np.zeros((3, len(xs))) # Populate point data sized 3xN.
     pts[0, :] = xs
     pts[1, :] = ys
@@ -281,7 +282,7 @@ class SuperPointFrontend(object):
       desc = torch.nn.functional.grid_sample(coarse_desc, samp_pts)
       desc = desc.data.cpu().numpy().reshape(D, -1)
       desc /= np.linalg.norm(desc, axis=0)[np.newaxis, :]
-    return pts, desc, heatmap
+    return pts, desc, coarse_desc.detach().cpu().numpy(), heatmap
 
 
 class PointTracker(object):
@@ -616,6 +617,8 @@ if __name__ == '__main__':
       help='Save output frames to a directory (default: False)')
   parser.add_argument('--write_dir', type=str, default='tracker_outputs/',
       help='Directory where to write output frames (default: tracker_outputs/).')
+  parser.add_argument('--components', type=str,
+      help="path to projection matrix (n_components, n_features) for projecting ND features to 3D RGB space")
   opt = parser.parse_args()
   print(opt)
 
@@ -633,6 +636,9 @@ if __name__ == '__main__':
 
   # This class helps merge consecutive point matches into tracks.
   tracker = PointTracker(opt.max_length, nn_thresh=fe.nn_thresh)
+
+  if opt.components:
+    components = np.loadtxt(opt.components)
 
   # Create a window to display the demo.
   if not opt.no_display:
@@ -665,7 +671,8 @@ if __name__ == '__main__':
 
     # Get points and descriptors.
     start1 = time.time()
-    pts, desc, heatmap = fe.run(img)
+    pts, desc, coarse_desc, heatmap = fe.run(img)
+    coarse_desc = np.moveaxis(coarse_desc[0], 0, -1)
     end1 = time.time()
 
     # Add points and descriptors to the tracker.
@@ -710,6 +717,10 @@ if __name__ == '__main__':
     # Display visualization image to screen.
     if not opt.no_display:
       cv2.imshow(win, out)
+      if opt.components:
+        coarse_desc = cv2.resize(coarse_desc, tuple(np.roll(out1.shape[:2], 1)))
+        coarse_desc = cv2.resize(coarse_desc, (opt.display_scale*opt.W, opt.display_scale*opt.H))
+        cv2.imshow("coarse_desc", coarse_desc @ components.T)
       key = cv2.waitKey(opt.waitkey) & 0xFF
       if key == ord('q'):
         print('Quitting, \'q\' pressed.')
