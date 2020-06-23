@@ -609,8 +609,6 @@ if __name__ == '__main__':
       help='OpenCV webcam video capture ID, usually 0 or 1 (default: 0).')
   parser.add_argument('--waitkey', type=int, default=1,
       help='OpenCV waitkey time in ms (default: 1).')
-  parser.add_argument('--cuda', action='store_true',
-      help='Use cuda GPU to speed up network processing speed (default: False)')
   parser.add_argument('--no_display', action='store_true',
       help='Do not display images to screen. Useful if running remotely (default: False).')
   parser.add_argument('--write', action='store_true',
@@ -631,7 +629,7 @@ if __name__ == '__main__':
                           nms_dist=opt.nms_dist,
                           conf_thresh=opt.conf_thresh,
                           nn_thresh=opt.nn_thresh,
-                          cuda=opt.cuda)
+                          cuda=torch.cuda.is_available())
   print('==> Successfully loaded pre-trained network.')
 
   # This class helps merge consecutive point matches into tracks.
