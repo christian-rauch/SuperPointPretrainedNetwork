@@ -127,7 +127,7 @@ class SuperPointNet(torch.nn.Module):
 class SuperPointFrontend(object):
   """ Wrapper around pytorch net to help with pre and post image processing. """
   def __init__(self, weights_path, nms_dist, conf_thresh, nn_thresh,
-               cuda=False):
+               cuda=False, benchmark=False):
     self.name = 'SuperPoint'
     self.cuda = cuda
     self.nms_dist = nms_dist
@@ -135,6 +135,11 @@ class SuperPointFrontend(object):
     self.nn_thresh = nn_thresh # L2 descriptor distance for good match.
     self.cell = 8 # Size of each output cell. Keep this fixed.
     self.border_remove = 4 # Remove points this close to the border.
+
+    self.benchmark = benchmark
+    if self.benchmark:
+      self.tstart = torch.cuda.Event(enable_timing=True)
+      self.tend = torch.cuda.Event(enable_timing=True)
 
     # Load the network in inference mode.
     self.net = SuperPointNet()
@@ -233,7 +238,14 @@ class SuperPointFrontend(object):
     if self.cuda:
       inp = inp.cuda()
     # Forward pass of network.
+    if self.benchmark:
+      self.tstart.record()
+      torch.cuda.synchronize()
     outs = self.net.forward(inp)
+    if self.benchmark:
+      self.tend.record()
+      torch.cuda.synchronize()
+      print(1000/self.tstart.elapsed_time(self.tend), "Hz")
     semi, coarse_desc = outs[0], outs[1]
     # Convert pytorch -> numpy.
     semi = semi.data.cpu().numpy().squeeze()
@@ -617,6 +629,8 @@ if __name__ == '__main__':
       help='Directory where to write output frames (default: tracker_outputs/).')
   parser.add_argument('--components', type=str,
       help="path to projection matrix (n_components, n_features) for projecting ND features to 3D RGB space")
+  parser.add_argument('--benchmark', action='store_true',
+      help="show timing information about inference")
   opt = parser.parse_args()
   print(opt)
 
@@ -629,7 +643,8 @@ if __name__ == '__main__':
                           nms_dist=opt.nms_dist,
                           conf_thresh=opt.conf_thresh,
                           nn_thresh=opt.nn_thresh,
-                          cuda=torch.cuda.is_available())
+                          cuda=torch.cuda.is_available(),
+                          benchmark=opt.benchmark)
   print('==> Successfully loaded pre-trained network.')
 
   # This class helps merge consecutive point matches into tracks.
