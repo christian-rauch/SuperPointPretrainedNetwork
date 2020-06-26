@@ -31,7 +31,7 @@ if __name__ == "__main__":
     bag = rosbag.Bag(args.bag_path, 'r')
 
     min_length = 2
-    max_length = 50
+    max_length = 1000
     nn_thresh = 0.7
 
     spfe = SuperPointFrontend(weights_path='superpoint_v1.pth', nms_dist=4, conf_thresh=0.015, nn_thresh=0.7, cuda=torch.cuda.is_available())
