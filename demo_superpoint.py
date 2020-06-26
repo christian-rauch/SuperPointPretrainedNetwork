@@ -478,8 +478,8 @@ class PointTracker(object):
     # Width of track and point circles to be drawn.
     stroke = 1
     # Iterate through each track and draw it.
-    for track in tracks:
-      clr = myjet[int(np.clip(np.floor(track[1]*10), 0, 9)), :]*255
+    for i, track in enumerate(tracks):
+      clr = myjet[int(i%myjet.shape[0])]*255
       for i in range(N-1):
         if track[i+2] == -1 or track[i+3] == -1:
           continue
