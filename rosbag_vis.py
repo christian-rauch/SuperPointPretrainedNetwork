@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import torch
 from demo_superpoint import SuperPointFrontend, PointTracker
+from demo_superpoint import myjet
 import argparse
 import rosbag
 import numpy as np
@@ -40,9 +41,15 @@ if __name__ == "__main__":
 
     win_tracks = "tracks"
     cv2.namedWindow(win_tracks, cv2.WINDOW_NORMAL)
+    win_matches = "matches"
+    cv2.namedWindow(win_matches, cv2.WINDOW_NORMAL)
     if args.components:
         win_feature = "feature"
         cv2.namedWindow(win_feature, cv2.WINDOW_NORMAL)
+
+    img0 = None
+    pts0 = None
+    desc0 = None
 
     for topic, msg, t in bag.read_messages(topics=[topic_colour]):
         img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_UNCHANGED)
@@ -55,7 +62,41 @@ if __name__ == "__main__":
         # float [0,1] for prediction
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)/255
 
+        if img0 is None:
+            img0 = img
+
         pts, desc, coarse_desc, heatmap = spfe.run(img)
+
+        if pts0 is None:
+            pts0 = pts
+
+        if desc0 is None:
+            desc0 = desc
+
+        # match current and initial descriptors
+        matches = tracker.nn_match_two_way(desc, desc0, nn_thresh=nn_thresh)
+
+        pts_i = pts.T[:, :2].astype(np.int).tolist()
+        pts_j = pts0.T[:, :2].astype(np.int).tolist()
+
+        img0_points = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR)
+        img1_points = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        marker_size = 3
+        for i, (id_i, id_j, score) in enumerate(matches.T):
+            c = myjet[int(i%myjet.shape[0])]*255
+            cv2.circle(img0_points, tuple(pts_j[int(id_j)]), marker_size, c)
+            cv2.circle(img1_points, tuple(pts_i[int(id_i)]), marker_size, c)
+        img_matches = cv2.hconcat((img1_points, img0_points), 2)
+
+        pts_j = (pts0.T[:, :2] + [img1_points.shape[1], 0]).astype(np.int).tolist()
+        for i, (id_i, id_j, score) in enumerate(matches.T):
+            c = myjet[int(i%myjet.shape[0])]*255
+            cv2.line(img_matches, tuple(pts_i[int(id_i)]), tuple(pts_j[int(id_j)]), c)
+
+        cv2.imshow(win_matches, img_matches)
+
+        if args.export:
+            cv2.imwrite(os.path.join(args.export, "matches_{}.png").format(t), img_matches*255)
 
         tracker.update(pts, desc)
         tracks = tracker.get_tracks(min_length)
