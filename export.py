@@ -7,6 +7,7 @@ from torchvision import transforms
 import numpy as np
 import os
 import cv2
+from skimage import io
 
 
 if __name__ == "__main__":
@@ -40,19 +41,24 @@ if __name__ == "__main__":
     if not os.path.isdir(args.export):
         os.makedirs(args.export)
 
-    spfe = SuperPointFrontend(weights_path='superpoint_v1.pth', nms_dist=4, conf_thresh=0.015, nn_thresh=0.7, cuda=torch.cuda.is_available())
+    # spfe = SuperPointFrontend(weights_path='superpoint_v1.pth', nms_dist=4, conf_thresh=0.015, nn_thresh=0.7, cuda=torch.cuda.is_available())
 
     for i_sample in range(len(data_loader)):
         I0, I1, map_xy, mask, _, _, _, _ = data_loader[i_sample]
         imgs = [I0, I1]
         fms = [None] * len(imgs)
 
-        for i in range(2):
-            # convert to grey scale
-            img = cv2.cvtColor((imgs[i]*255).astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)/255
-            pts, desc, coarse_desc, heatmap = spfe.run(img)
-            # move feature dim to end
-            coarse_desc = np.moveaxis(coarse_desc[0], 0, -1)
-            coarse_desc = cv2.resize(coarse_desc, tuple(np.roll(img.shape[:2], 1)))
+        io.imsave(os.path.join(args.export, str(i_sample)+"_1"
+        ".png"), (I0*255).astype(np.uint8))
+        io.imsave(os.path.join(args.export, str(i_sample)+"_2"
+        ".png"), (I1*255).astype(np.uint8))
 
-            np.savez_compressed(os.path.join(args.export, str(i_sample*2+i)), I=img, F=coarse_desc)
+        # for i in range(2):
+        #     # convert to grey scale
+        #     img = cv2.cvtColor((imgs[i]*255).astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)/255
+        #     pts, desc, coarse_desc, heatmap = spfe.run(img)
+        #     # move feature dim to end
+        #     coarse_desc = np.moveaxis(coarse_desc[0], 0, -1)
+        #     coarse_desc = cv2.resize(coarse_desc, tuple(np.roll(img.shape[:2], 1)))
+
+        #     np.savez_compressed(os.path.join(args.export, str(i_sample*2+i)), I=img, F=coarse_desc)

@@ -141,17 +141,22 @@ class SuperPointFrontend(object):
       self.tstart = torch.cuda.Event(enable_timing=True)
       self.tend = torch.cuda.Event(enable_timing=True)
 
-    # Load the network in inference mode.
-    self.net = SuperPointNet()
-    if cuda:
-      # Train on GPU, deploy on GPU.
-      self.net.load_state_dict(torch.load(weights_path))
-      self.net = self.net.cuda()
-    else:
-      # Train on GPU, deploy on CPU.
-      self.net.load_state_dict(torch.load(weights_path,
-                               map_location=lambda storage, loc: storage))
+    # # Load the network in inference mode.
+    # self.net = SuperPointNet()
+    # if cuda:
+    #   # Train on GPU, deploy on GPU.
+    #   self.net.load_state_dict(torch.load(weights_path))
+    #   self.net = self.net.cuda()
+    # else:
+    #   # Train on GPU, deploy on CPU.
+    #   self.net.load_state_dict(torch.load(weights_path,
+    #                            map_location=lambda storage, loc: storage))
+    # self.net.eval()
+
+    self.net = torch.load('SuperPointNet.pt')
+    self.net.to('cuda' if self.cuda else 'cpu')
     self.net.eval()
+
 
   def nms_fast(self, in_corners, H, W, dist_thresh):
     """
@@ -241,26 +246,47 @@ class SuperPointFrontend(object):
     if self.benchmark:
       self.tstart.record()
       torch.cuda.synchronize()
+    print("input", inp.shape, inp.device)
+    start1 = time.time()
     outs = self.net.forward(inp)
+    end1 = time.time()
+    print("fwd time", end1-start1)
     if self.benchmark:
       self.tend.record()
       torch.cuda.synchronize()
+      print(self.tstart.elapsed_time(self.tend), "ms")
       print(1000/self.tstart.elapsed_time(self.tend), "Hz")
     semi, coarse_desc = outs[0], outs[1]
+    print(type(semi), semi.shape)
     # Convert pytorch -> numpy.
     semi = semi.data.cpu().numpy().squeeze()
+    print(type(semi), semi.shape)
+
+    print("semi", semi.min(), semi.max())
+    print("desc", coarse_desc.min(), coarse_desc.max())
+
     # --- Process points.
     dense = np.exp(semi) # Softmax.
     dense = dense / (np.sum(dense, axis=0)+.00001) # Should sum to 1.
     # Remove dustbin.
     nodust = dense[:-1, :, :]
+    print("nodust", type(nodust), nodust.shape)
+
     # Reshape to get full resolution heatmap.
     Hc = int(H / self.cell)
     Wc = int(W / self.cell)
     nodust = nodust.transpose(1, 2, 0)
+    print("heatmap0", type(nodust), nodust.shape)
+    print(nodust.min(), nodust.max())
     heatmap = np.reshape(nodust, [Hc, Wc, self.cell, self.cell])
+    print("heatmap1", type(heatmap), heatmap.shape)
     heatmap = np.transpose(heatmap, [0, 2, 1, 3])
+    print("heatmap2", type(heatmap), heatmap.shape)
     heatmap = np.reshape(heatmap, [Hc*self.cell, Wc*self.cell])
+    print("heatmapX", type(heatmap), heatmap.shape)
+
+    # heatmap = nodust.reshape([Hc, Wc, self.cell, self.cell]).transpose([0, 2, 1, 3]).reshape([H, W])
+
     ys, xs = np.where(heatmap >= self.conf_thresh) # Confidence threshold.
     if len(xs) == 0:
       return np.zeros((3, 0)), None, coarse_desc, heatmap
@@ -268,6 +294,7 @@ class SuperPointFrontend(object):
     pts[0, :] = xs
     pts[1, :] = ys
     pts[2, :] = heatmap[ys, xs]
+    print("pts0", pts.shape)
     pts, _ = self.nms_fast(pts, H, W, dist_thresh=self.nms_dist) # Apply NMS.
     inds = np.argsort(pts[2,:])
     pts = pts[:,inds[::-1]] # Sort by confidence.
@@ -284,13 +311,17 @@ class SuperPointFrontend(object):
     else:
       # Interpolate into descriptor map using 2D point locations.
       samp_pts = torch.from_numpy(pts[:2, :].copy())
+      print("pts0", samp_pts.shape)
       samp_pts[0, :] = (samp_pts[0, :] / (float(W)/2.)) - 1.
       samp_pts[1, :] = (samp_pts[1, :] / (float(H)/2.)) - 1.
       samp_pts = samp_pts.transpose(0, 1).contiguous()
+      print("pts1", samp_pts.shape)
       samp_pts = samp_pts.view(1, 1, -1, 2)
       samp_pts = samp_pts.float()
+      print("ptsX", samp_pts.shape)
       if self.cuda:
         samp_pts = samp_pts.cuda()
+      print(coarse_desc.shape)
       desc = torch.nn.functional.grid_sample(coarse_desc, samp_pts)
       desc = desc.data.cpu().numpy().reshape(D, -1)
       desc /= np.linalg.norm(desc, axis=0)[np.newaxis, :]
@@ -342,6 +373,7 @@ class PointTracker(object):
     # Compute L2 distance. Easy since vectors are unit normalized.
     dmat = np.dot(desc1.T, desc2)
     dmat = np.sqrt(2-2*np.clip(dmat, -1, 1))
+    print("dmat", dmat.shape)
     # Get NN indices and scores.
     idx = np.argmin(dmat, axis=1)
     scores = dmat[np.arange(dmat.shape[0]), idx]
@@ -539,6 +571,7 @@ class VideoStreamer(object):
         self.listing.sort()
         self.listing = self.listing[::self.skip]
         self.maxlen = len(self.listing)
+        print("found", self.maxlen)
         if self.maxlen == 0:
           raise IOError('No images were found (maybe bad \'--img_glob\' parameter?)')
 
@@ -647,6 +680,15 @@ if __name__ == '__main__':
                           benchmark=opt.benchmark)
   print('==> Successfully loaded pre-trained network.')
 
+  # # torch.save(fe.net, "spfe.pth")
+  # # export model
+  # # note: this is the SuperPointNet without the frontend
+  # example = torch.rand(1, 1, 640, 480)
+  # if torch.cuda.is_available():
+  #   example = example.cuda()
+  # traced_script_module = torch.jit.trace(fe.net, example)
+  # traced_script_module.save("SuperPointNet.pt")
+
   # This class helps merge consecutive point matches into tracks.
   tracker = PointTracker(opt.max_length, nn_thresh=fe.nn_thresh)
 
@@ -687,6 +729,8 @@ if __name__ == '__main__':
     pts, desc, coarse_desc, heatmap = fe.run(img)
     coarse_desc = np.moveaxis(coarse_desc[0], 0, -1)
     end1 = time.time()
+
+    print("inf time", end1-start1)
 
     # Add points and descriptors to the tracker.
     tracker.update(pts, desc)
@@ -751,6 +795,8 @@ if __name__ == '__main__':
     if opt.show_extra:
       print('Processed image %d (net+post_process: %.2f FPS, total: %.2f FPS).'\
             % (vs.i, net_t, total_t))
+
+  cv2.waitKey()
 
   # Close any remaining windows.
   cv2.destroyAllWindows()

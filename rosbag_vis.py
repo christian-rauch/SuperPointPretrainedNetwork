@@ -7,6 +7,7 @@ import rosbag
 import numpy as np
 import cv2
 import os
+import time
 
 
 topic_colour = "/camera/rgb/image_rect_color/compressed"
@@ -32,10 +33,11 @@ if __name__ == "__main__":
     bag = rosbag.Bag(args.bag_path, 'r')
 
     min_length = 2
-    max_length = 1000
+    # max_length = 1000
+    max_length = 5
     nn_thresh = 0.7
 
-    spfe = SuperPointFrontend(weights_path='superpoint_v1.pth', nms_dist=4, conf_thresh=0.015, nn_thresh=0.7, cuda=torch.cuda.is_available())
+    spfe = SuperPointFrontend(weights_path='superpoint_v1.pth', nms_dist=4, conf_thresh=0.015, nn_thresh=0.7, cuda=torch.cuda.is_available(), benchmark=True)
 
     tracker = PointTracker(max_length, nn_thresh=spfe.nn_thresh)
 
@@ -43,6 +45,10 @@ if __name__ == "__main__":
     cv2.namedWindow(win_tracks, cv2.WINDOW_NORMAL)
     win_matches = "matches"
     cv2.namedWindow(win_matches, cv2.WINDOW_NORMAL)
+    win_matches_cv = "matches cv::BF"
+    cv2.namedWindow(win_matches_cv, cv2.WINDOW_NORMAL)
+    win_heatmap = "heatmap"
+    cv2.namedWindow(win_heatmap, cv2.WINDOW_NORMAL)
     if args.components:
         win_feature = "feature"
         cv2.namedWindow(win_feature, cv2.WINDOW_NORMAL)
@@ -65,7 +71,13 @@ if __name__ == "__main__":
         if img0 is None:
             img0 = img
 
+        print(img.shape)
+
+        start1 = time.time()
         pts, desc, coarse_desc, heatmap = spfe.run(img)
+        end1 = time.time()
+
+        print("inf time", end1-start1)
 
         if pts0 is None:
             pts0 = pts
@@ -73,8 +85,12 @@ if __name__ == "__main__":
         if desc0 is None:
             desc0 = desc
 
+        cv2.imshow(win_heatmap, heatmap)
+
         # match current and initial descriptors
         matches = tracker.nn_match_two_way(desc, desc0, nn_thresh=nn_thresh)
+
+        max_dist = np.max(matches[2,:])
 
         pts_i = pts.T[:, :2].astype(np.int).tolist()
         pts_j = pts0.T[:, :2].astype(np.int).tolist()
@@ -90,10 +106,42 @@ if __name__ == "__main__":
 
         pts_j = (pts0.T[:, :2] + [img1_points.shape[1], 0]).astype(np.int).tolist()
         for i, (id_i, id_j, score) in enumerate(matches.T):
-            c = myjet[int(i%myjet.shape[0])]*255
+            # c = myjet[int(i%myjet.shape[0])]*255
+            c = myjet[int(score/max_dist*(myjet.shape[0]-1))]
+            # swap colour of heat map RGB->BGR
+            # tmp = c[0]; c[0] = c[2]; c[2] = tmp
+            # c = [score/max_dist] * 3
             cv2.line(img_matches, tuple(pts_i[int(id_i)]), tuple(pts_j[int(id_j)]), c)
 
         cv2.imshow(win_matches, img_matches)
+
+        ## cv matching
+        matcher = cv2.BFMatcher.create(crossCheck=True)
+        print("descr shape", desc.shape, desc0.shape)
+        matches = matcher.match(desc.T, desc0.T)
+        print("matches", len(matches))
+        print("pts shape", pts.shape, pts0.shape)
+        # img_match = cv2.drawMatches(img1_points, pts.T, img0_points, pts0.T, matches, [])
+        img_matches2 = cv2.hconcat((img, img0), 2)
+        img_matches2 = cv2.cvtColor(img_matches2, cv2.COLOR_GRAY2RGB)
+        pts_j = (pts0.T[:, :2] + [img1_points.shape[1], 0]).astype(np.int).tolist()
+        # for i, (id_i, id_j, score) in enumerate(matches.T):
+        for i, m in enumerate(matches):
+            # cv2.DMatch...
+            id_i = m.queryIdx
+            id_j = m.trainIdx
+            score = m.distance
+            if score>0.7:
+                continue
+            # print(score)
+            # c = myjet[int(i%myjet.shape[0])]*255
+            c = myjet[int(min(0.86, score)/0.86*(myjet.shape[0]-1))]
+            # swap colour of heat map RGB->BGR
+            # tmp = c[0]; c[0] = c[2]; c[2] = tmp
+            # c = [score/max_dist] * 3
+            cv2.line(img_matches2, tuple(pts_i[int(id_i)]), tuple(pts_j[int(id_j)]), c)
+        cv2.imshow(win_matches_cv, img_matches2)
+        cv2.waitKey(1)
 
         if args.export:
             cv2.imwrite(os.path.join(args.export, "matches_{}.png").format(t), img_matches*255)
